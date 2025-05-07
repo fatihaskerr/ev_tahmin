@@ -1,54 +1,72 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, KFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from xgboost import XGBRegressor
 
-# 1. Temiz verileri yükle
+# Veriyi yükle
 train = pd.read_csv('data/clean_train.csv')
 test = pd.read_csv('data/clean_test.csv')
 
-# 2. Hedef ve ID'yi ayır
-X = train.drop(['SalePrice', 'Id'], axis=1)
+# Özellikler ve hedef değişkeni ayır
+X = train.drop(columns=['SalePrice', 'Id'])
 y = train['SalePrice']
 test_ids = test['Id']
-X_test = test.drop(['Id'], axis=1)
+X_test = test.drop(columns=['Id'])
 
-# 3. Kategorik verileri One-Hot Encoding ile dönüştür
+# Kategorik veriyi sayısala çevir
 X = pd.get_dummies(X)
 X_test = pd.get_dummies(X_test)
 
-# 4. Eğitim ve test verisini hizala
+# Kolonları hizala
 X, X_test = X.align(X_test, join='left', axis=1, fill_value=0)
 
-# 5. Verileri ölçeklendir
+# Veriyi ölçeklendir
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 X_test_scaled = scaler.transform(X_test)
 
-# 6. Eğitim/test ayır
-X_train, X_val, y_train, y_val = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+# K-Fold Cross Validation
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+rmse_list = []
+mae_list = []
+r2_list = []
 
-# 7. XGBoost modelini oluştur ve eğit
-model = XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
-model.fit(X_train, y_train)
+for train_index, val_index in kf.split(X_scaled):
+    X_train, X_val = X_scaled[train_index], X_scaled[val_index]
+    y_train, y_val = y.iloc[train_index], y.iloc[val_index]
 
-# 8. Doğrulama setinde tahmin ve değerlendirme
-y_pred = model.predict(X_val)
-print("📊 XGBoost Performansı:")
-print("RMSE:", np.sqrt(mean_squared_error(y_val, y_pred)))
-print("MAE:", mean_absolute_error(y_val, y_pred))
-print("R2 Score:", r2_score(y_val, y_pred))
+    # Modeli oluştur ve eğit
+    model = XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
+    model.fit(X_train, y_train)
 
-# 9. Gerçek test verisinde tahmin yap
-test_preds = model.predict(X_test_scaled)
+    # Tahminler
+    y_pred = model.predict(X_val)
 
-# 10. Sonuçları submission dosyasına yaz
-submission = pd.DataFrame({
-    'Id': test_ids,
-    'SalePrice': test_preds
-})
+    # Hata hesaplamaları
+    rmse = np.sqrt(mean_squared_error(y_val, y_pred))
+    mae = mean_absolute_error(y_val, y_pred)
+    r2 = r2_score(y_val, y_pred)
 
-submission.to_csv('outputs/submission_xgb.csv', index=False)
-print("✅ Tahminler outputs/submission_xgb.csv dosyasına kaydedildi.")
+    rmse_list.append(rmse)
+    mae_list.append(mae)
+    r2_list.append(r2)
+
+# Sonuçları yazdır
+print("📊 XGBoost Performansı (K-Fold Cross Validation):")
+print(f"RMSE: {np.mean(rmse_list)}")
+print(f"MAE: {np.mean(mae_list)}")
+print(f"R2 Score: {np.mean(r2_list)}")
+
+# Son olarak modelin tamamını tüm veri ile eğit
+final_model = XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
+final_model.fit(X_scaled, y)
+
+# Test verisinde tahmin yap
+test_preds = final_model.predict(X_test_scaled)
+
+# Sonuçları submission dosyasına kaydet
+submission = pd.DataFrame({'Id': test_ids, 'SalePrice': test_preds})
+submission.to_csv('outputs/submission_xgb_cv.csv', index=False)
+print("✅ Tahminler outputs/submission_xgb_cv.csv dosyasına kaydedildi.")
